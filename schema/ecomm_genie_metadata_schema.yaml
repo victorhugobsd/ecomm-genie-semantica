@@ -1,0 +1,929 @@
+#  =============================================================================
+# PROJETO     : E-comm Genie — Camada Semântica
+# AUTOR       : Victor Hugo Daroit | Núcleo Estruturante
+# VERSÃO      : 1.0.0
+#
+# ESTRUTURA DE CAMADAS:
+#   trusted  -> tb_vendas (tabela já saneada)
+#   semantic -> dim_tempo, dim_produto, dim_cliente, dim_canal, dim_geografia
+#   semantic -> fato_vendas (tabela fato com chaves para relacionamento com dimensões)
+#   mart     -> vendas_diarias, vendas_mensais, vendas_cliente, vendas_produto, vendas_cupom
+# =============================================================================
+
+version: "1.0.0"
+project: "ecomm_genie_semantica"
+last_updated: "2025-03"
+owner: "ecomm_nucleo_estruturante"
+
+# -----------------------------------------------------------------------------
+# CONTEXTO GERAL DA SOLUÇÃO: Descrição, regras gerais e detalhes de escopo
+# -----------------------------------------------------------------------------
+context:
+  name: "E-comm Genie — Assistente de Analytics de Vendas"
+  description: >
+    Assistente de dados do E-commerce do Grupo Boticário. Responde perguntas
+    sobre performance de vendas em linguagem natural. Opera sobre uma
+    estrutura trusted -> semantic -> mart.
+  primary_table: "mart.vendas_diarias"
+  primary_table_note: >
+    Responde a maior parte das perguntas. Sempre prefira esta tabela antes de
+    consultar a fato_vendas. Só vá à fato quando precisar de grain de pedido + item.
+  data_range: "Janeiro a Dezembro de 2022"
+  update_frequency: "Diária"
+  language: "pt-BR"
+  tone: "executivo, direto. Sempre informe o período dos dados ao responder e reforçe as palavras chave da pergunta do usuário."
+
+  out_of_scope:
+    - texto: "CPF real, nome ou outras informações sensíveis de clientes individuais"
+      motivo: "cpf_consumidor_full excluído por LGPD. dim_cliente usa apenas cpf_hash para análises no CRM."
+      alternativa: "Identificar top clientes por cpf_hash, que é um identificador anonimizado do cliente e pode ser usado."
+    - texto: "Tráfego de buscadores de IA (como Perplexity, ChatGPT etc.)"
+      motivo: "Canais de busca por IA ausentes na base de 2022. Dado inexistente na origem."
+      alternativa: "Mostrar performance por canal_semantico: Google Orgânico, Google Pago, CRM, etc."
+    - texto: "ROI de campanhas (investimento vs. retorno)"
+      motivo: "Dados de custo de mídia não integram esta base, portanto não é possível calcular ROI."
+      alternativa: "Mostrar receita por canal_semantico e des_cupom."
+    - texto: "Forecasts"
+      motivo: "Temos apenas dados históricos na base, sem modelo de previsibilidade implementado."
+      alternativa: "Mostras tendência MoM e variação acumulada do período disponível."
+    - texto: "Busca de produtos ou marcas por nome (exemplos de produtos: 'Malbec', 'Her Code' etc; exemplos de marcas: 'Boticário', 'Eudora' etc)"
+      motivo: "Temos apenas os códigos de produto e marca na base."
+      alternativa: "Solicitar ao usuário que faça a busca por código de produto ou marca."
+
+
+# -----------------------------------------------------------------------------
+# GUIA: qual tabela usar para cada tipo de pergunta
+# A LLM deve seguir esta hierarquia antes de decidir onde buscar os dados.
+# -----------------------------------------------------------------------------
+
+guide:
+  - pergunta_tipo: "Performance diária, MoM, LY, por dia, ciclo, canal, marca, categoria ou região"
+    tabela: "mart.vendas_diarias"
+    motivo: "Já agregado com flags temporais. Filtre diretamente baseado na solicitação."
+
+  - pergunta_tipo: "Valores a nível de marca no mês, variação MoM de receitas, share de marca no período"
+    tabela: "mart.vendas_mensais"
+    motivo: "Já contém share_marca_pct e variacao_mom_pct calculados."
+
+  - pergunta_tipo: "Top clientes, frequência de compra, categoria preferida"
+    tabela: "mart.vendas_cliente"
+    motivo: "Tabela a nível de cliente com receita_total, ultima_compra, segmento_recencia."
+
+  - pergunta_tipo: "SKU individual x combo por ciclo. Desempenho de produto por ciclo/ano_mes"
+    tabela: "mart.vendas_produto"
+    motivo: "Tabela a nível de SKU + ciclo + apresentacao_combo. Tem share_apresentacao_pct para comparar INDIVIDUAL x COMBO."
+
+  - pergunta_tipo: "SKU individual x combo por ciclo. Desempenho de produto por ciclo/ano_mes"
+    tabela: "mart.vendas_produto"
+    motivo: "Tabela a nível de SKU + ciclo + apresentacao_combo. Tem share_apresentacao_pct para comparar INDIVIDUAL x COMBO."
+
+  - pergunta_tipo: "Desempenho de um cupom específico para uma marca a nível de mês"
+    tabela: "semantic.vendas_cupom"
+    motivo: "Tabela com agregação por cupom + marca + mes. Ticket médio já calculado nessa granularidade."
+
+# -----------------------------------------------------------------------------
+# CAMADA SEMANTIC — DIMENSÕES
+# -----------------------------------------------------------------------------
+dimensions:
+
+  # ---------------------------------------------------------------------------
+  - name: "dim_tempo"
+    dataset: "eccom_genie.semantic"
+    surrogate_key: "id_tempo"
+    natural_key: "dt_venda"
+    description: >
+      Calendário completo com flags booleanas de período. A tabela mais
+      importante para perguntas temporais, pois elimina cálculo de datas no
+      orquestrador e reduz risco de alucinação da LLM.
+    grain: "1 linha = 1 data"
+
+    fields:
+
+      - name: "id_tempo"
+        type: "INTEGER"
+        description: "Surrogate key no formato YYYYMMDD (ex: 20221127)"
+
+      - name: "dt_venda"
+        type: "DATE"
+        description: "Data da venda no formato YYYY-MM-DD"
+        llm_aliases: ["data", "dia", "quando", "ontem", "hoje"]
+
+      - name: "ano_mes"
+        type: "STRING"
+        description: "Período no formato YYYY-MM"
+        llm_aliases: ["mês", "período", "dezembro", "novembro", "competência"]
+        example_values: ["2022-12", "2022-11"]
+
+      - name: "nome_mes"
+        type: "STRING"
+        description: "Nome do mês em português"
+        llm_aliases: ["nome do mês", "qual mês", "no mês de"]
+        allowed_values: ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"]
+
+      - name: "trimestre"
+        type: "INTEGER"
+        llm_aliases: ["Q1","Q2","Q3","Q4","primeiro trimestre","segundo trimestre"]
+        allowed_values: ["1", "2", "3", "4"]
+
+      - name: "cod_ciclo"
+        type: "INTEGER"
+        description: "Código do ciclo comercial (ex: 202201 = Ciclo 01 de 2022)"
+        llm_aliases: ["ciclo","ciclo 01","ciclo comercial"]
+        note: "Ciclo <> Mês. O mesmo mês pode ter dois ou mais ciclos distintos."
+        example_values: ["202212", "202201"]
+
+      - name: "des_ciclo"
+        type: "STRING"
+        description: "Nome do ciclo. 'SEM INFO' normalizado para 'REGULAR'."
+        llm_aliases: ["nome do ciclo","campanha","Natal","Dia das Mães","Dia dos Namorados","Dia dos Pais"]
+        allowed_values: ["REGULAR","NAMORADOS","MAES","NATAL","PAIS"]
+
+      - name: "flg_ontem"
+        type: "INTEGER"
+        description: "1 apenas para a data de ontem (CURRENT_DATE - 1)"
+        llm_usage: "WHERE flg_ontem = 1 para perguntas sobre 'ontem'"
+
+      - name: "flg_hoje"
+        type: "INTEGER"
+        description: "1 apenas para a data de hoje (CURRENT_DATE)"
+        llm_usage: "WHERE flg_hoje = 1 para perguntas sobre 'hoje'"
+
+      - name: "flg_ly_hoje"
+        type: "INTEGER"
+        description: "1 para o mesmo dia de hoje do ano passado (LY = Last Year)"
+        llm_usage: "WHERE flg_ly_hoje = 1 para comparativo LY de hoje"
+
+      - name: "flg_ly_ontem"
+        type: "INTEGER"
+        description: "1 para o mesmo dia de ontem do ano passado (LY = Last Year)"
+        llm_usage: "WHERE flg_ly_ontem = 1 para comparativo LY de ontem"
+
+      - name: "flg_mes_atual"
+        type: "INTEGER"
+        description: "1 para todas as datas do mês atual"
+        llm_usage: "WHERE flg_mes_atual = 1 para perguntas sobre 'este mês'"
+
+      - name: "flg_ultimo_mes"
+        type: "INTEGER"
+        description: "1 para todas as datas do mês anterior"
+        llm_usage: "WHERE flg_ultimo_mes = 1 para perguntas sobre o 'mês passado'"
+
+      - name: "flg_ly_mes"
+        type: "INTEGER"
+        description: "1 para o mesmo mês do ano passado"
+        llm_usage: "WHERE flg_ly_mes = 1 para comparativo LY mensal"
+
+      - name: "flg_ano_atual"
+        type: "INTEGER"
+        description: "1 para todas as datas do ano atual"
+        llm_usage: "WHERE flg_ano_atual = 1 para comparativo deste ano corrente"
+
+      - name: "flg_ly_ano"
+        type: "INTEGER"
+        description: "1 para todas as datas do ano passado"
+        llm_usage: "WHERE flg_ly_ano = 1 para comparativo anual LY"
+
+  # ---------------------------------------------------------------------------
+  - name: "dim_produto"
+    dataset: "eccom_genie.semantic"
+    surrogate_key: "id_produto"
+    natural_key: "cod_material"
+    description: "Catálogo de SKUs com hierarquia marca -> categoria"
+    grain: "1 linha = 1 cod_material (SKU)"
+
+    fields:
+
+      - name: "cod_material"
+        type: "STRING"
+        llm_aliases: ["SKU","produto","código do produto","item"]
+        note: "Não possuímos nomes dos produtos, apenas SKU."
+
+      - name: "cod_material_pai"
+        type: "STRING"
+        description: "Agrupamento para variantes do mesmo produto base"
+        llm_aliases: ["produto pai","família de produto"]
+
+      - name: "marca"
+        type: "STRING"
+        llm_aliases: ["marca","qual marca","Boticário","Eudora","quem disse berenice"]
+        note: "Valores reais na produção. Base de demo usa MARCA-N."
+
+      - name: "categoria"
+        type: "STRING"
+        llm_aliases: ["categoria","tipo de produto","Perfumaria","Maquiagem","linha"]
+        note: "Valores reais na produção. Base de demo usa CAT-N."
+
+  # ---------------------------------------------------------------------------
+  - name: "dim_cliente"
+    dataset: "eccom_genie.semantic"
+    surrogate_key: "id_cliente"
+    natural_key: "cpf_hash"
+    description: >
+      Clientes anonimizados. cpf_hash é o único identificador disponível.
+      cpf_consumidor_full excluído por LGPD em todos os objetos.
+    grain: "1 linha = 1 cpf_hash"
+
+    fields:
+
+      - name: "cpf_hash"
+        type: "STRING"
+        description: "Hash MD5 do CPF real. Identificador anonimizado para CRM."
+        llm_aliases: ["cliente","consumidor","CPF anonimizado"]
+        governance_note: >
+          cpf_consumidor_full (CPF real) excluído por LGPD.
+          Análises de CRM usam cpf_hash. Para ação de marketing personalizada,
+
+      - name: "cidade"
+        type: "STRING"
+        description: "Cidade do último pedido do cliente"
+
+      - name: "uf"
+        type: "STRING"
+        description: "Estado do último pedido do cliente"
+
+      - name: "regiao"
+        type: "STRING"
+        description: "Região do último pedido do cliente"
+
+  # ---------------------------------------------------------------------------
+  - name: "dim_canal"
+    dataset: "eccom_genie.semantic"
+    surrogate_key: "id_canal"
+    description: >
+      Canal de venda com categorias semânticas legíveis. canal_semantico é
+      o campo principal para perguntas de origem de tráfego, pois traduz combinações
+      em rótulos naturais para a LLM.
+    grain: "1 linha = combinação única de canal + fonte + mídia"
+
+    fields:
+
+      - name: "canal_semantico"
+        type: "STRING"
+        description: "Categoria legível de canal para consumo pela LLM"
+        llm_aliases: ["canal","origem","Google","Facebook","CRM","orgânico","pago"]
+        allowed_values:
+          - value: "Google Pago"
+            description: "Google Ads e Google Adwords"
+          - value: "Google Orgânico"
+            description: "SEO e tráfego orgânico do Google"
+          - value: "Facebook Pago"
+            description: "Facebook Ads e variantes"
+          - value: "Outros Pago"
+            description: "Afiliados, rakuten, zanox, rtbhouse e outros pagos"
+          - value: "Orgânico / Direto"
+            description: "Acesso direto, bing orgânico e outros não pagos"
+          - value: "CRM"
+            description: "E-mail, push, Salesforce, Firebase"
+          - value: "Brand Awareness"
+            description: "Campanhas de branding (TV, Instagram, Globo)"
+          - value: "Outros"
+            description: "Fontes não classificadas"
+        note: >
+          Valor 'IA' reservado para captura futura de tráfego de buscadores de IA
+          (Perplexity, ChatGPT). Casos não disponíveis na base de 2022.
+
+      - name: "canal_agrupado"
+        type: "STRING"
+        description: "Agrupamento de canais de Marketing para mais fácil identificação da LLM"
+        llm_aliases: ["Site","direto","marketplace","App"]
+        allowed_values:
+          - value: "Site"
+            description: "Site — canal direto ao consumidor"
+          - value: "App"
+            description: "App — canal direto ao consumidor"
+          - value: "Marketplace"
+            description: "Todos os canais Mktp (Out, In e GB)"
+
+      - name: "des_canal_venda_final"
+        type: "STRING"
+        llm_aliases: ["site","app","marketplace"]
+        allowed_values: ["Site","App","Mktp Out","Mktp In","Mktp GB"]
+
+      - name: "fonte_de_trafego_nivel_1"
+        type: "STRING"
+        allowed_values: ["1. Pagos","2. Não Pagos","3. CRM","4. Brand Awareness","5. Outros"]
+
+  # ---------------------------------------------------------------------------
+  - name: "dim_geografia"
+    dataset: "eccom_genie.semantic"
+    surrogate_key: "id_geografia"
+    description: "Hierarquia geográfica de entrega dos pedidos"
+    grain: "1 linha = combinação única de região + uf + cidade"
+
+    fields:
+
+      - name: "regiao"
+        type: "STRING"
+        llm_aliases: ["região","Nordeste","Sudeste","Sul","Norte","Centro-Oeste"]
+        allowed_values: ["SUDESTE","SUL","NORDESTE","CENTRO OESTE","NORTE"]
+
+      - name: "uf"
+        type: "STRING"
+        llm_aliases: ["estado","UF","SP","RJ","MG", "uf"]
+
+      - name: "cidade"
+        type: "STRING"
+        llm_aliases: ["cidade","município"]
+
+
+# -----------------------------------------------------------------------------
+# CAMADA SEMANTIC — FATO
+# -----------------------------------------------------------------------------
+fact_table:
+  name: "fato_vendas"
+  dataset: "eccom_genie.semantic"
+  description: >
+    Tabela fato central. Grain atômico: 1 linha = 1 item de pedido.
+    Contém keys para todas as dimensões: dim_tempo, dim_produto, dim_cliente, dim_canal, dim_geografia.
+    Descrição de campos pode ser consumida da tb_vendas em trusted.
+    Usar marts preferencialmente, portanto só consulte a fato para análises
+    específicas que os marts não cobrem.
+  grain: "1 linha = 1 item de pedido (cod_pedido + cod_material)"
+  partition_field: "dt_venda"
+  cluster_fields: ["cod_pedido", "cod_material", "des_canal_venda_final", "marca_ind"]
+
+  metrics:
+
+    - name: "receita_liquida"
+      type: "FLOAT"
+      description: >
+        Valor efetivamente pago pelo cliente (vlr_venda_pago). Zero para
+        pedidos cancelados. Métrica primária, pois não temos nulos na base.
+      llm_aliases: ["receita","faturamento","vendas","quanto vendeu","valor pago", "total pago"]
+      aggregation: "SUM"
+      format: "currency_BRL"
+      business_rule: "vlr_venda_pago WHERE flg_valido = 1, senão 0"
+
+    - name: "receita_bruta"
+      type: "FLOAT"
+      description: "Receita líquida + desconto (valor antes do desconto)"
+      llm_aliases: ["receita bruta","valor bruto","antes do desconto","valor sem cupom"]
+      aggregation: "SUM"
+      format: "currency_BRL"
+
+    - name: "desconto"
+      type: "FLOAT"
+      description: "Valor do desconto no item"
+      llm_aliases: ["desconto","abatimento","quanto foi descontado","valor do cupom"]
+      aggregation: "SUM"
+      format: "currency_BRL"
+
+    - name: "flg_combo"
+      type: "INTEGER"
+      description: "1 se o item foi vendido como COMBO, 0 se INDIVIDUAL"
+      llm_aliases: ["combo","kit","individual","avulso"]
+
+    - name: "flg_cancelado"
+      type: "INTEGER"
+      description: "1 se o pedido foi cancelado"
+      llm_aliases: ["cancelado","cancelamento","pedidos cancelados"]
+
+    - name: "flg_valido"
+      type: "INTEGER"
+      description: "1 se aprovado AND faturado = pedido válido para métricas de receita"
+      business_rule: "flg_aprovada = 1 AND flg_faturada = 1"
+
+
+# -----------------------------------------------------------------------------
+# CAMADA MART — TABELAS PRÉ-AGREGADAS
+# Consultar sempre antes da fato.
+# -----------------------------------------------------------------------------
+mart_tables:
+
+  # ---------------------------------------------------------------------------
+  - name: "vendas_diarias"
+    dataset: "eccom_genie.mart"
+    description: >
+      Tabela principal para consumo pela LLM. Responde a maioria das perguntas 
+      do canal #fale-com-dados.
+    grain: "1 linha = dia + ciclo + canal + marca + categoria + região"
+    partition_field: "dt_venda"
+    cluster_fields: ["canal_semantico", "marca", "regiao"]
+    llm_usage: "Use sempre que as análisese chegarem a nível de dia de vendas."
+
+    key_dimensions:
+      - "dt_venda, ano_mes, nome_mes, trimestre, des_ciclo"
+      - "canal_semantico, canal_agrupado"
+      - "marca, categoria"
+      - "regiao, estado"
+
+    metrics:
+
+      - name: "faturamento"
+        description: >
+          Valor efetivamente pago pelo cliente (receita_liquida). Zero para
+          pedidos cancelados. Métrica primária, pois não temos nulos na base.
+        llm_aliases: ["receita","faturamento","vendas","quanto vendeu","valor pago", "total pago"]
+        aggregation: "SUM"
+        format: "currency_BRL"
+
+      - name: "receita_bruta"
+        type: "FLOAT"
+        description: "Receita líquida + desconto (valor antes do desconto)"
+        llm_aliases: ["receita bruta","valor bruto","antes do desconto","valor sem cupom"]
+        aggregation: "SUM"
+        format: "currency_BRL"
+
+      - name: "pedidos"
+        description: "Quantidades de pedidos realizados na granularidade da tabela.""
+        llm_aliases: ["pedidos","número de pedidos","quantos pedidos","volume"]
+        aggregation: "SUM"
+
+      - name: "clientes_distintos"
+        description: "Quantidades de clientes distintos com pedidos realizados na granularidade da tabela.""
+        llm_aliases: ["clientes","compradores únicos","base de clientes","clientes distintos"]
+        aggregation: "SUM"
+
+      - name: "ticket_medio"
+        description: "Receita líquida / pedidos válidos por pedido"
+        llm_aliases: ["ticket médio","valor médio por pedido","gasto médio"]
+        aggregation: "AVG"
+        format: "currency_BRL"
+
+      - name: "desconto_total"
+        description: "Valor do desconto total na granularidade da tabela"
+        llm_aliases: ["desconto","total de descontos"]
+        aggregation: "SUM"
+        format: "currency_BRL"
+
+      - name: "pedidos_cancelados"
+        description: "Quantidades de pedidos cancelados na granularidade da tabela.""
+        llm_aliases: ["cancelamentos","pedidos cancelados","cancelados"]
+        aggregation: "SUM"
+
+      - name: "taxa_cancelamento_pct"
+        llm_aliases: ["taxa de cancelamento","% cancelado"]
+        aggregation: "AVG"
+        format: "percentage"
+
+      - name: "desconto_medio_pct"
+        llm_aliases: ["% desconto","desconto médio percentual"]
+        aggregation: "AVG"
+        format: "percentage"
+
+      - name: "flg_ontem"
+        type: "INTEGER"
+        description: "1 apenas para a data de ontem (CURRENT_DATE - 1)"
+        llm_usage: "WHERE flg_ontem = 1 para perguntas sobre 'ontem'"
+
+      - name: "flg_hoje"
+        type: "INTEGER"
+        description: "1 apenas para a data de hoje (CURRENT_DATE)"
+        llm_usage: "WHERE flg_hoje = 1 para perguntas sobre 'hoje'"
+
+      - name: "flg_ly_hoje"
+        type: "INTEGER"
+        description: "1 para o mesmo dia de hoje do ano passado (LY = Last Year)"
+        llm_usage: "WHERE flg_ly_hoje = 1 para comparativo LY de hoje"
+
+      - name: "flg_ly_ontem"
+        type: "INTEGER"
+        description: "1 para o mesmo dia de ontem do ano passado (LY = Last Year)"
+        llm_usage: "WHERE flg_ly_ontem = 1 para comparativo LY de ontem"
+
+      - name: "flg_mes_atual"
+        type: "INTEGER"
+        description: "1 para todas as datas do mês atual"
+        llm_usage: "WHERE flg_mes_atual = 1 para perguntas sobre 'este mês'"
+
+      - name: "flg_ultimo_mes"
+        type: "INTEGER"
+        description: "1 para todas as datas do mês anterior"
+        llm_usage: "WHERE flg_ultimo_mes = 1 para perguntas sobre o 'mês passado'"
+
+      - name: "flg_ly_mes"
+        type: "INTEGER"
+        description: "1 para o mesmo mês do ano passado"
+        llm_usage: "WHERE flg_ly_mes = 1 para comparativo LY mensal"
+
+      - name: "flg_ano_atual"
+        type: "INTEGER"
+        description: "1 para todas as datas do ano atual"
+        llm_usage: "WHERE flg_ano_atual = 1 para comparativo deste ano corrente"
+
+      - name: "flg_ly_ano"
+        type: "INTEGER"
+        description: "1 para todas as datas do ano passado"
+        llm_usage: "WHERE flg_ly_ano = 1 para comparativo anual LY"
+
+      - name: "canal_semantico"
+        type: "STRING"
+        description: "Categoria legível de canal para consumo pela LLM"
+        llm_aliases: ["canal","origem","Google","Facebook","CRM","orgânico","pago"]
+        allowed_values:
+          - value: "Google Pago"
+            description: "Google Ads e Google Adwords"
+          - value: "Google Orgânico"
+            description: "SEO e tráfego orgânico do Google"
+          - value: "Facebook Pago"
+            description: "Facebook Ads e variantes"
+          - value: "Outros Pago"
+            description: "Afiliados, rakuten, zanox, rtbhouse e outros pagos"
+          - value: "Orgânico / Direto"
+            description: "Acesso direto, bing orgânico e outros não pagos"
+          - value: "CRM"
+            description: "E-mail, push, Salesforce, Firebase"
+          - value: "Brand Awareness"
+            description: "Campanhas de branding (TV, Instagram, Globo)"
+          - value: "Outros"
+            description: "Fontes não classificadas"
+        note: >
+          Valor 'IA' reservado para captura futura de tráfego de buscadores de IA
+          (Perplexity, ChatGPT). Casos não disponíveis na base de 2022.
+
+      - name: "canal_agrupado"
+        type: "STRING"
+        description: "Agrupamento de canais de Marketing para mais fácil identificação da LLM"
+        llm_aliases: ["Site","direto","marketplace","App"]
+        allowed_values:
+          - value: "Site"
+            description: "Site — canal direto ao consumidor"
+          - value: "App"
+            description: "App — canal direto ao consumidor"
+          - value: "Marketplace"
+            description: "Todos os canais Mktp (Out, In e GB)"
+
+      - name: "marca"
+        type: "STRING"
+        llm_aliases: ["marca","qual marca","Boticário","Eudora","quem disse berenice"]
+        note: "Valores reais na produção. Base de demo usa MARCA-N."
+
+      - name: "categoria"
+        type: "STRING"
+        llm_aliases: ["categoria","tipo de produto","Perfumaria","Maquiagem","linha"]
+        note: "Valores reais na produção. Base de demo usa CAT-N."
+
+      - name: "regiao"
+        type: "STRING"
+        llm_aliases: ["região","Nordeste","Sudeste","Sul","Norte","Centro-Oeste"]
+        allowed_values: ["SUDESTE","SUL","NORDESTE","CENTRO OESTE","NORTE"]
+
+      - name: "estado"
+        type: "STRING"
+        llm_aliases: ["estado","UF","SP","RJ","MG", "uf"]
+
+  # ---------------------------------------------------------------------------
+  - name: "vendas_mensais"
+    dataset: "eccom_genie.mart"
+    description: "Mart mensal com variação MoM e YoY e share de marca já calculados"
+    grain: "1 linha = mês + marca"
+    llm_usage: "perguntas de variação mensal/anual e share de marca"
+
+    metrics:
+
+      - name: "flg_mes_atual"
+        type: "INTEGER"
+        description: "1 para todas as datas do mês atual"
+        llm_usage: "WHERE flg_mes_atual = 1 para perguntas sobre 'este mês'"
+
+      - name: "flg_ultimo_mes"
+        type: "INTEGER"
+        description: "1 para todas as datas do mês anterior"
+        llm_usage: "WHERE flg_ultimo_mes = 1 para perguntas sobre o 'mês passado'"
+
+      - name: "flg_ly_mes"
+        type: "INTEGER"
+        description: "1 para o mesmo mês do ano passado"
+        llm_usage: "WHERE flg_ly_mes = 1 para comparativo LY mensal"
+
+      - name: "flg_ano_atual"
+        type: "INTEGER"
+        description: "1 para todas as datas do ano atual"
+        llm_usage: "WHERE flg_ano_atual = 1 para comparativo deste ano corrente"
+
+      - name: "flg_ly_ano"
+        type: "INTEGER"
+        description: "1 para todas as datas do ano passado"
+        llm_usage: "WHERE flg_ly_ano = 1 para comparativo anual LY"
+
+      - name: "faturamento"
+        llm_aliases: ["receita mensal","faturamento do mês"]
+        aggregation: "SUM"
+        format: "currency_BRL"
+
+      - name: "variacao_mom_pct"
+        description: "Variação percentual de faturamento vs. mês anterior"
+        llm_aliases: ["crescimento","variação mensal","MoM","comparado ao mês passado","crescemos?"]
+        aggregation: "AVG"
+        format: "percentage"
+        business_rule: "(faturamento_mes - faturamento_mes_anterior) / faturamento_mes_anterior * 100"
+        note: "NULL para o primeiro mês da série. Informar ao usuário quando NULL."
+
+      - name: "variacao_pedidos_mom_pct"
+        llm_aliases: ["crescimento em volume","crescemos em pedidos","MoM pedidos"]
+        aggregation: "AVG"
+        format: "percentage"
+
+      - name: "variacao_yoy_pct"
+        description: "Variação percentual de faturamento vs. ano anterior"
+        llm_aliases: ["crescimento","variação anual","YoY","comparado ao ano passado","crescemos?"]
+        aggregation: "AVG"
+        format: "percentage"
+        business_rule: "(faturamento_mes - faturamento_mes_anterior) / faturamento_mes_anterior * 100"
+        note: "NULL para o primeiro mês da série. Informar ao usuário quando NULL."
+
+      - name: "variacao_pedidos_yoy_pct"
+        llm_aliases: ["crescimento em volume anual","crescemos em pedidos","YoY pedidos"]
+        aggregation: "AVG"
+        format: "percentage"
+
+      - name: "share_marca_pct"
+        description: "Participação da marca no faturamento total do mês"
+        llm_aliases: ["share","participação","% da marca","quanto representa"]
+        aggregation: "AVG"
+        format: "percentage"
+
+      - name: "pedidos"
+        description: "Quantidades de pedidos realizados na granularidade da tabela.""
+        llm_aliases: ["pedidos","número de pedidos","quantos pedidos","volume"]
+        aggregation: "SUM"
+
+      - name: "clientes_distintos"
+        description: "Quantidades de clientes distintos com pedidos realizados na granularidade da tabela.""
+        llm_aliases: ["clientes","compradores únicos","base de clientes","clientes distintos"]
+        aggregation: "SUM"
+
+      - name: "ticket_medio"
+        description: "Receita líquida / pedidos válidos por pedido"
+        llm_aliases: ["ticket médio","valor médio por pedido","gasto médio"]
+        aggregation: "AVG"
+        format: "currency_BRL"
+
+      - name: "desconto_total"
+        description: "Valor do desconto total na granularidade da tabela"
+        llm_aliases: ["desconto","total de descontos"]
+        aggregation: "SUM"
+        format: "currency_BRL"
+
+      - name: "pedidos_cancelados"
+        description: "Quantidades de pedidos cancelados na granularidade da tabela.""
+        llm_aliases: ["cancelamentos","pedidos cancelados","cancelados"]
+        aggregation: "SUM"
+
+      - name: "taxa_cancelamento_pct"
+        llm_aliases: ["taxa de cancelamento","% cancelado"]
+        aggregation: "AVG"
+        format: "percentage"
+
+      - name: "desconto_medio_pct"
+        llm_aliases: ["% desconto","desconto médio percentual"]
+        aggregation: "AVG"
+        format: "percentage"
+
+  # ---------------------------------------------------------------------------
+  - name: "vendas_cliente"
+    dataset: "eccom_genie.mart"
+    description: "Mart de cliente (cpf_hash)"
+    grain: "1 linha = 1 cpf_hash"
+    llm_usage: "top clientes, frequência, recência cliente, preferências"
+
+    metrics:
+
+      - name: "receita_total"
+        llm_aliases: ["quanto gastou","receita do cliente","valor total"]
+        aggregation: "SUM"
+        format: "currency_BRL"
+
+      - name: "pedidos_total"
+        llm_aliases: ["quantos pedidos fez","frequência","número de compras"]
+        aggregation: "SUM"
+
+      - name: "ticket_medio"
+        llm_aliases: ["ticket médio do cliente","gasto médio por pedido"]
+        format: "currency_BRL"
+
+      - name: "ultima_compra"
+        type: "DATE"
+        llm_aliases: ["última compra","quando comprou por último"]
+
+      - name: "categoria_preferida"
+        description: "Baseado em maior receita"
+        llm_aliases: ["categoria favorita","o que mais compra"]
+
+      - name: "marca_preferida"
+        description: "Baseado em maior receita"
+        llm_aliases: ["marca favorita","qual marca prefere"]
+
+      - name: "segmento_recencia"
+        description: "Ativo (≤30 dias), Em risco (≤90 dias) ou Inativo (>90 dias)"
+        llm_aliases: ["status do cliente","ativo","inativo","em risco"]
+        allowed_values: ["Ativo","Em risco","Inativo"]
+
+  # ---------------------------------------------------------------------------
+  - name: "vendas_produto"
+    dataset: "eccom_genie.mart"
+    description: >
+      Mart de produto por ciclo e apresentação. 
+    grain: "1 linha = cod_material + cod_ciclo + apresentacao_combo"
+    llm_usage: "performance de SKU por ciclo, individual vs. combo"
+
+    metrics:
+
+      - name: "desconto_total"
+        description: "Valor do desconto total na granularidade da tabela"
+        llm_aliases: ["desconto","total de descontos"]
+        aggregation: "SUM"
+        format: "currency_BRL"
+
+      - name: "ticket_medio"
+        llm_aliases: ["ticket médio do produto no ciclo","ticket médio por combo ou individual"]
+        format: "currency_BRL"
+
+      - name: "receita_liquida"
+        llm_aliases: ["receita do produto","quanto o SKU vendeu"]
+        aggregation: "SUM"
+        format: "currency_BRL"
+
+      - name: "pedidos"
+        llm_aliases: ["pedidos do produto","quantas vezes foi comprado"]
+        aggregation: "SUM"
+
+      - name: "share_apresentacao_pct"
+        description: "% da receita do SKU que veio de INDIVIDUAL vs. COMBO no ciclo"
+        llm_aliases: ["share individual","share combo","vendeu mais como combo ou individual"]
+        format: "percentage"
+        business_rule: "receita_apresentacao / receita_total_sku_ciclo * 100"
+
+  # ---------------------------------------------------------------------------
+  - name: "vendas_cupom"
+    dataset: "eccom_genie.mart"
+    description: >
+      Mart de cupom por canal, marca e mês. 
+    grain: "1 linha = cupom + canal_semantico + marca + mês"
+    llm_usage: "performance de cupom por canal, marca vs mês"
+
+    metrics:
+
+      - name: "desconto_total"
+        description: "Valor do desconto total na granularidade da tabela"
+        llm_aliases: ["desconto","total de descontos"]
+        aggregation: "SUM"
+        format: "currency_BRL"
+
+      - name: "ticket_medio"
+        llm_aliases: ["ticket médio do cupom no marca","ticket médio por mês"]
+        format: "currency_BRL"
+
+      - name: "receita_liquida"
+        llm_aliases: ["receita usando o cupom","quanto o cupom vendeu"]
+        aggregation: "SUM"
+        format: "currency_BRL"
+
+      - name: "pedidos"
+        llm_aliases: ["pedidos com cupom X","quantas vezes foi utilizado"]
+        aggregation: "SUM"
+
+      - name: "canal_semantico"
+        type: "STRING"
+        description: "Categoria legível de canal para consumo pela LLM"
+        llm_aliases: ["canal","origem","Google","Facebook","CRM","orgânico","pago"]
+        allowed_values:
+          - value: "Google Pago"
+            description: "Google Ads e Google Adwords"
+          - value: "Google Orgânico"
+            description: "SEO e tráfego orgânico do Google"
+          - value: "Facebook Pago"
+            description: "Facebook Ads e variantes"
+          - value: "Outros Pago"
+            description: "Afiliados, rakuten, zanox, rtbhouse e outros pagos"
+          - value: "Orgânico / Direto"
+            description: "Acesso direto, bing orgânico e outros não pagos"
+          - value: "CRM"
+            description: "E-mail, push, Salesforce, Firebase"
+          - value: "Brand Awareness"
+            description: "Campanhas de branding (TV, Instagram, Globo)"
+          - value: "Outros"
+            description: "Fontes não classificadas"
+        note: >
+          Valor 'IA' reservado para captura futura de tráfego de buscadores de IA
+          (Perplexity, ChatGPT). Casos não disponíveis na base de 2022.
+
+      - name: "marca"
+        type: "STRING"
+        llm_aliases: ["marca","qual marca","Boticário","Eudora","quem disse berenice"]
+        note: "Valores reais na produção. Base de demo usa MARCA-N."
+
+# -----------------------------------------------------------------------------
+# CAMPOS EXCLUÍDOS
+# -----------------------------------------------------------------------------
+
+excluded_fields:
+
+  - name: "cpf_consumidor_full"
+    type: "INTEGER"
+    present_in_raw: true
+    present_in_trusted: false
+    present_in_semantic: false
+    present_in_mart: false
+    reason: "CPF real do consumidor é dado pessoal sensível por LGPD"
+    substitute: "cpf_hash em dim_cliente e mart.vendas_cliente"
+
+  - name: "vlr_receita_bruta_omni"
+    type: "FLOAT"
+    present_in_raw: true
+    present_in_trusted: false
+    reason: >
+      670 nulos e valores negativos (média -0.42, máximo 0.0).
+      Confirmado como ruído.
+    substitute: "receita_liquida (vlr_venda_pago) como métrica primária"
+
+
+# -----------------------------------------------------------------------------
+# RUÍDOS TRATADOS NA TRUSTED
+# -----------------------------------------------------------------------------
+
+data_quality_treatments:
+
+  - field: "apresentacao_combo"
+    issue: "Campos inconsistentes: 'INDIVIDUAL'/'individual', 'COMBO'/'combo'"
+    treatment: "UPPER(TRIM(apresentacao_combo))"
+
+  - field: "des_ciclo"
+    issue: "'SEM INFO' em linhas de ciclos sem campanha nomeada"
+    treatment: "CASE WHEN des_ciclo = 'SEM INFO' THEN 'REGULAR'"
+
+  - field: "des_midia_canal"
+    issue: "Typo 'salesfoce' no lugar de 'salesforce'"
+    treatment: "CASE WHEN LOWER(des_midia_canal) = 'salesfoce' THEN 'salesforce'"
+
+  - field: "flg_pedidos_cd / flg_pedidos_pickup"
+    issue: "731 e 2.262 nulos respectivamente"
+    treatment: "COALESCE(flg_pedidos_cd / flg_pedidos_pickup, 0): nulo interpretado como ausência da flag"
+
+
+# -----------------------------------------------------------------------------
+# EXEMPLOS DE PERGUNTAS SUPORTADAS
+# -----------------------------------------------------------------------------
+example_supported_questions:
+
+  - id: "P1"
+    question: "Qual foi o faturamento de ontem no site comparado com o mesmo dia do ano passado (LY)? Crescemos em valor ou em volume de pedidos?"
+    strategy: >
+      Consultar mart.vendas_diarias diretamente.
+      Filtrar flg_ontem = TRUE para ontem, flg_ly_ontem = TRUE para LY.
+      Filtrar canal_agrupado = 'Site'.
+      Comparar faturamento e pedidos entre os dois períodos.
+    tables: ["mart.vendas_diarias"]
+    note: "Base de demo cobre 2022. Informar ao usuário se a data solicitada não existir."
+
+  - id: "P2"
+    question: "O SKU 'Malbec Desodorante Colônia' vendeu mais como item individual ou dentro de combos/kits no Ciclo 01?"
+    strategy: >
+      Consultar mart.vendas_produto.
+      Filtrar cod_material = 'X' (não temos acesso aos nomes dos produtos, precisamos que seja passado o código pelo usuário) e cod_ciclo = '202201'.
+      Comparar receita_liquida e pedidos por apresentacao_combo.
+      share_apresentacao_pct já está calculado.
+    tables: ["mart.vendas_produto"]
+
+  - id: "P3"
+    question: "Qual categoria teve o melhor ticket médio na Região Nordeste em dezembro, considerando apenas pedidos que foram aprovados e faturados?"
+    strategy: >
+      Consultar mart.vendas_mensais.
+      Filtrar regiao = 'NORDESTE' e nome_mes = 'Dezembro'.
+      Agrupar por categoria, ordenar por ticket_medio DESC.
+    tables: ["mart.vendas_mensais"]
+
+  - id: "P4"
+    question: "Qual o share de faturamento de cada marca (Boticário, Eudora, etc) dentro do total do E-commerce neste mês?"
+    strategy: >
+      Consultar mart.vendas_mensais.
+      Filtrar flg_mes_atual = TRUE.
+      Campo share_marca_pct já calculado — retornar diretamente.
+    tables: ["mart.vendas_mensais"]
+
+
+# -----------------------------------------------------------------------------
+# PERGUNTAS FORA DE ESCOPO - Com ou sem respostas parciais/alternativas
+# -----------------------------------------------------------------------------
+out_of_scope_questions:
+
+  - id: "P1"
+    question: "Quem são os top 10 consumidores (CPF) que mais gastaram em 'Perfumaria' no último mês? Quero mandar um brinde para eles."
+    reason: "cpf_consumidor_full excluído por LGPD. CPF real indisponível."
+    suggested_alternative: >
+      "Identificar os top 10 clientes por cpf_hash que mais gastaram em Perfumaria (filtro por código da categoria, nomes não presentes no dataset).
+      São identificadores anonimizados, sendo assim, para ação de CRM com CPF real, o time
+      de dados deve fazer o de-para em sistema interno controlado."
+    partial_answer_available: true
+    partial_answer_table: "mart.vendas_cliente"
+    partial_answer_filter: "categoria_preferida = 'Perfumaria' ORDER BY receita_total DESC LIMIT 10"
+
+  - id: "P2"
+    question: "Quanto da nossa receita hoje vem de tráfego de buscadores de IA (como Perplexity e ChatGPT) em comparação ao Google Orgânico tradicional?"
+    reason: "Indicadores de buscadores de IA não capturadas na base de 2022. Dado inexistente na origem."
+    suggested_alternative: >
+      "Mostrar a receita por canal_semantico disponível: Google Orgânico,
+      Google Pago, CRM, Brand Awareness e Outros. O canal 'IA' está
+      criado para captura futura."
+    partial_answer_available: true
+    partial_answer_table: "mart.vendas_diarias"
+    partial_answer_filter: "SUM(receita_bruta) GROUP BY canal_semantico"
+
+  - id: "P3"
+    question: "Qual foi o ROI da campanha de cupons no Instagram ontem?"
+    reason: "Dados de custo de mídia indisponíveis. ROI = receita/custo incalculável."
+    suggested_alternative: >
+      "Mostrar a receita atribuída ao canal Brand Awareness.
+      O ROI completo requer integração com a custos de mídia, e este dado não está disponível nesta base."
+    partial_answer_available: true
+    partial_answer_table: "mart.vendas_diarias"
