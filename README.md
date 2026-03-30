@@ -20,7 +20,7 @@
 
 ## 1. Contexto
 
-O canal `#fale-com-dados` recebe requisições analíticas que consomem tempo de especialistas. O **E-comm Genie** é um assistente GenAI integrado ao Slack que responde perguntas de performance de vendas em linguagem natural, liberando o time de dados para trabalho de maior valor.
+O canal `#fale-com-dados` recebe requisições que consomem tempo de especialistas. O **E-comm Genie** é um assistente GenAI integrado ao Slack que responde perguntas de performance de vendas em linguagem natural, liberando o time de dados para atividades de maior valor.
 
 Este repositório entrega a fundação de dados do Genie, baseado em uma arquitetura dimensional completa sobre `raw.tb_vendas`, pronta para consumo por LLM.
 
@@ -54,7 +54,7 @@ _diarias     _mensais     _cliente     _produto      _cupom
 
 | Camada | Dataset | Responsabilidade |
 |---|---|---|
-| Raw | `ecomm_genie.raw` | Dados brutos — não modificados |
+| Raw | `ecomm_genie.raw` | Dados brutos não modificados |
 | Trusted | `ecomm_genie.trusted` | Limpeza, normalização e exclusão de dados sensíveis |
 | Semantic | `ecomm_genie.semantic` | Dimensões + Fato |
 | Mart | `ecomm_genie.mart` | Tabelas pré-agregadas para consumo direto pela LLM |
@@ -63,9 +63,9 @@ _diarias     _mensais     _cliente     _produto      _cupom
 
 O projeto possui duas procedures com estratégias diferentes:
 
-**Full load** (`ecomm_genie_semantic_full_load`) — recria todos os objetos do zero com `CREATE OR REPLACE`. Usar na primeira execução ou para reconstrução completa.
+**Full load** (`ecomm_genie_semantic_full_load`): recria todos os objetos do zero com `CREATE OR REPLACE`. Usar na primeira execução ou para reconstrução completa.
 
-**Incremental** (`ecomm_genie_semantic_incremental`) — atualiza apenas os dados dos últimos 14 dias via `MERGE` na trusted e fato, e `DELETE + INSERT` no mart diário. Usar na execução diária para reduzir custo e tempo de processamento.
+**Incremental** (`ecomm_genie_semantic_incremental`): atualiza apenas os dados dos últimos 14 dias via `MERGE` na trusted e fato, e `DELETE + INSERT` no mart diário. Usar na execução diária para reduzir custo e tempo de processamento.
 
 ### 2.3 Otimizações BigQuery
 
