@@ -24,7 +24,7 @@ Pois é, a partir de agora isso vai ser possível! É com muito orgulho que apre
 - Share de faturamento por marca no mês e variação MoM/YoY
 - SKU X vendeu mais como individual ou dentro de combo em determinado ciclo?
 - Qual categoria teve melhor ticket médio no Nordeste em dezembro?
-- Top clientes por receita (identificados por hash anonimizado — LGPD)
+- Top clientes por receita (identificados por hash anonimizado (LGPD))
 
 *O que ainda não está no escopo desta versão:*
 
