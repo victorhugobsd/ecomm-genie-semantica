@@ -89,6 +89,9 @@ ecomm-genie-semantica/
 ├── schema/
 │   └── ecomm_genie_metadata_schema.yaml      ← Dicionário semântico para a LLM
 │
+├── orchestrator/
+│   └── dummy.py                              ← Orquestrador a ser definido e desenvolvido pelo Núcleo de Insights
+│
 ├── release/
 │   └── comunicado.md                         ← Post de comunicado de release da gerramenta
 │
