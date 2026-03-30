@@ -89,6 +89,9 @@ ecomm-genie-semantica/
 ├── schema/
 │   └── ecomm_genie_metadata_schema.yaml      ← Dicionário semântico para a LLM
 │
+├── release/
+│   └── comunicado.md                         ← Post de comunicado de release da gerramenta
+│
 └── README.md                                 ← Este arquivo que vos fala
 ```
 
@@ -227,13 +230,15 @@ O share é calculado com `PARTITION BY ano_mes` sobre um mart com grain `ano_mes
 
 ## 8. Evoluções futuras
 
-**Captura de Dados de Buscadores IA** — adicionar condições na `dim_canal` para classificar tráfego de Perplexity, ChatGPT e similares em `canal_semantico = 'IA'`, já criado no código atual.
+**Captura de Dados de Buscadores IA**: Adicionar condições na `dim_canal` para classificar tráfego de Perplexity, ChatGPT e similares em `canal_semantico = 'IA'`, já criado no código atual.
 
-**Integração com dados de custo de mídia** — criar `mart.valores_midia` com `investimento`, `receita_atribuida` e `roi` por canal e período, habilitando resposta completa à pergunta de ROI de campanhas.
+**Integração com dados de custo de mídia**: Criar `mart.valores_midia` com `investimento`, `receita_atribuida` e `roi` por canal e período, permitindo resposta completa à pergunta de ROI de campanhas.
 
-**Enriquecimento de `dim_cliente`** — integrar com cadastro oficial de clientes para substituir a definição de dados geográficos baseados em "último pedido" por dados cadastrais reais, mantendo `cpf_hash` como chave de relacionamento.
+**Enriquecimento de `dim_cliente`**: Integrar com cadastro oficial de clientes para substituir a definição de dados geográficos baseados em "último pedido" por dados cadastrais reais, mantendo `cpf_hash` como chave de relacionamento.
 
-**Feedback loop via Slack** — implementar reações positivas/negativas nas respostas do Genie para coleta de avaliações e priorização de melhorias no sistema.
+**Enriquecimento de `dim_produto`**: Integrar com cadastro oficial de produtos para permitir busca de desempenho de produtos por nomes semânticos, como "Malbec", "Desodorante", "Creme", "Her Code" etc.
+
+**Feedback loop via Slack**: Implementar reações positivas/negativas nas respostas do Genie para coleta de avaliações e priorização de melhorias no sistema.
 
 ---
 
