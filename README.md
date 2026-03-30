@@ -20,7 +20,7 @@
 
 ## 1. Contexto
 
-O canal `#fale-com-dados` recebe requisições que consomem tempo de especialistas. O **E-comm Genie** é um assistente GenAI integrado ao Slack que responde perguntas de performance de vendas em linguagem natural, liberando o time de dados para atividades de maior valor.
+O canal `#fale-com-dados` recebe requisições que consomem tempo do time. O **E-comm Genie** é um assistente GenAI integrado ao Slack que responde perguntas de performance de vendas em linguagem natural, liberando o time de dados para atividades de maior valor.
 
 Este repositório entrega a fundação de dados do Genie, baseado em uma arquitetura dimensional completa sobre `raw.tb_vendas`, pronta para consumo por LLM.
 
