@@ -19,8 +19,8 @@ BEGIN
 -- =============================================================================
 -- STEP 1: Limpeza, normalização e exclusão de dados sensíveis.
 --
--- cpf_consumidor_full não é selecionado — exclusão por design de governança.
--- vlr_receita_bruta_omni desconsiderado por conta de muito ruído: 670 nulos e valores negativos (média -0.42, max 0.0).
+-- cpf_consumidor_full não é selecionado, exclusão por design de governança.
+-- vlr_receita_bruta_omni desconsiderado por conta de muito ruído: 670 nulos e valores negativos.
 -- =============================================================================
 
 MERGE ecomm_genie.trusted.tb_vendas t
