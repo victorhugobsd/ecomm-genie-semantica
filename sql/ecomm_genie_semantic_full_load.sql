@@ -9,8 +9,8 @@
 --   pelo E-comm Genie via Slack.
 --
 -- GOVERNANÇA:
---   - cpf_consumidor_full removido em todos os objetos — CPF real presente
---     na raw layer. dim_cliente usa apenas cpf_hash (MD5 anonimizado).
+--   - cpf_consumidor_full removido em todos os objetos (CPF real presente
+--     na raw layer). dim_cliente usa apenas cpf_hash (MD5 anonimizado).
 --   - Pedidos cancelados excluídos de algumas das métricas de receita via flg_valido.
 --
 -- RUÍDOS:
@@ -34,8 +34,8 @@ BEGIN
 -- =============================================================================
 -- STEP 1: Limpeza, normalização e exclusão de dados sensíveis.
 --
--- cpf_consumidor_full não é selecionado — exclusão por design de governança.
--- vlr_receita_bruta_omni desconsiderado por conta de muito ruído: 670 nulos e valores negativos (média -0.42, max 0.0).
+-- cpf_consumidor_full não é selecionado, exclusão por design de governança.
+-- vlr_receita_bruta_omni desconsiderado por conta de muito ruído: 670 nulos e valores negativos.
 -- =============================================================================
 
 CREATE OR REPLACE TABLE ecomm_genie.trusted.tb_vendas 
