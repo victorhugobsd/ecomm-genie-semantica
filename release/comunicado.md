@@ -2,7 +2,7 @@
 #### Autor: Victor Hugo Daroit | Núcleo Estruturante
 ---
 
-[Lançamento | E-comm Genie — Fundação Semântica para GenAI]
+**Lançamento | E-comm Genie — Fundação Semântica para GenAI**
 
 Olá pessoal! Tudo bem por aí?
 
