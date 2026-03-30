@@ -242,4 +242,4 @@ O share é calculado com `PARTITION BY ano_mes` sobre um mart com grain `ano_mes
 
 ---
 
-*Victor Hugo Daroit — Núcleo Estruturante | Grupo Boticário — 2025*
+*Victor Hugo Daroit — Núcleo Estruturante | Grupo Boticário — 2026*
